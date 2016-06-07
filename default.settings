@@ -1,0 +1,13 @@
+# Default values for scripts centreon-networking
+# Some may be overwritten from command lines, others don't
+
+SNMP_COMMUNITY=public
+SNMP_VERSION=2c
+USER=SuperUser
+PASSWORD=SuperUser
+HOST_TEMPLATE=switch-router
+SERVICE_TEMPLATE_TRAFFIC=check_traffic64_extreme
+SERVICE_TEMPLATE_ERRORS=check_traffic64_extreme
+RESTART=no
+POLLER=Central
+HOSTGROUP=Xarxa
