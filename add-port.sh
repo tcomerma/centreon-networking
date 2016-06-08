@@ -14,12 +14,12 @@ REVISION='Version: 0.1'
 
 VERBOSE=1
 
-CLAPI='/usr....core/centreon.pl'
+CLAPI='/usr/local/centreon/www/modules/centreon-clapi/core/centreon'
 
 log() {
   if [ $VERBOSE -eq 1 ]
     then
-      echo $1
+      echo "$1"
     fi
 
 }
@@ -40,7 +40,7 @@ print_help() {
   echo "  "
   echo "   Default values for optional parameters [] are picked from default.settings file from same directory"
 	echo ""
-  exit $STATE_UNKNOWN
+  exit $STATE_ERROR
 }
 
 # Load file with default values
@@ -51,43 +51,48 @@ STATE_ERROR=1
 
 
 # Proces de parametres
-while getopts "H:n:d:T:rhV" Option
+while getopts "n:p:d:T:rhV" Option
 do
 	case $Option in
     H ) HOST=$OPTARG;;
-    n ) NAME=$OPTARG;;
+    n ) HOSTNAME=$OPTARG;;
+    p ) PORT=$OPTARG;;
     d ) DESCRIPTION=$OPTARG;;
     T ) SERVICE_TEMPLATE=$OPTARG;;
     r ) RESTART=yes;;
     V ) VERBOSE=1;;
 		h ) print_help;;
-		* ) echo "unimplemented option";;
+		* ) echo "unimplemented option"
+        print_help
 		esac
 done
 
 log "Parametres:"
 log "  USER: $USER"
 log "  PASSWORD: $PASSWORD"
-log "  NAME: $NAME"
-log "  HOSTNAME: $HOST"
+log "  PORT: $PORT"
+log "  HOSTNAME: $HOSTNAME"
 log "  HOSTGROUP: $HOSTGROUP"
 log "  HOST_TEMPLATE: $HOST_TEMPLATE"
 log "  Restart after: $RESTART"
 
 # Check parameters
-if [ -z "$HOST" ] ; then
-	echo " Error - NO HOSTADDRESS provided "
-	echo ""
-	print_help
-	echo ""
-fi
-
-if [ -z "$NAME" ] ; then
-  echo " Error - Missing NAME "
+if [ -z "$HOSTNAME" ] ; then
+  echo " Error - Missing HOSTNAME"
   echo ""
   print_help
   echo ""
 fi
+
+
+# Try to get HOSTADDRESS from centreon
+HOSTADDRESS=`perl $CLAPI -u $USER -p $PASSWORD -o HOST -a show -v "$HOSTNAME"  | tail -n +2 |cut -f 4 -d ";"`
+if [ $? -ne 0 ]
+  then
+    echo "ERROR: Unable to find $HOSTNAME"
+    exit $STATE_ERROR
+  fi
+log "  HOSTADDRESS: $HOSTADDRESS"
 
 #Consulta a 1.0.8802.1.1.2.1.3.7.1.3 cercant el nom d'interface que s'ha indicat com a paràmetre
 #iso.0.8802.1.1.2.1.3.7.1.3.67 = STRING: "ge.1.3"
@@ -97,60 +102,68 @@ fi
 #Consulta a 1.0.8802.1.1.2.1.4.1.1.9.0.262.ID per obtenir el nom de switch
 #iso.0.8802.1.1.2.1.4.1.1.9.0.262.9 = STRING: "C3-ESTCEIDADES-CC4-N1"
 
-if [ -z "$DESCRIPTION" ] ; then
-  # Try to find interface details using snmp and lldp
-  int_id=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION $HOST 1.0.8802.1.1.2.1.3.7.1.3 | grep "\"$NAME\"" | cut -f 12 -d . | cut -f 1 -d "="`
-  if [ $? -eq 0 ]
-    then
-      # Continue to find remote port
-      remote_port=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOST 1.0.8802.1.1.2.1.4.1.1.7.0.$int_id`
-      if [ $? -eq 0 ]
-        then
-          remote_system=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOST 1.0.8802.1.1.2.1.4.1.1.9.0.$int_id`
-            if [ $? -eq 0 || -z "$remote_system" ]
-              then
-                DESCRIPTION=`echo "$NAME -> $remote_system: $remote_port" | tr -d '"'`
-              else
-                # Try to find system hardware id instead of name
-                remote_system=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOST 1.0.8802.1.1.2.1.4.1.1.5.0.$int_id | tr " " "-"`
-                if [ $? -eq 0 ]
-                  then
-                    DESCRIPTION=`echo "$NAME -> $remote_system: $remote_port" | tr -d '"'`
-                  else
-                    DESCRIPTION=`echo "$NAME -> ????: $remote_port" | tr -d '"'`
-                  fi
-              fi
-        else
-          DESCRIPTION="$NAME"
-        fi
-    else
-      echo "WARNING: SNMP query failed"
-      DESCRIPTION="$NAME"
-    fi  
-  log "DESCRIPTION (from SNMP): $DESCRIPTION"
-fi
-
 # Check if service already exists
-H=`perl $CLAPI -u $USER -p $PASSWORD -o HOST -a show -v $HOST | grep $HOST`
-if [ "$H" ]
+S=`perl $CLAPI -u $USER -p $PASSWORD -o SERVICE -a show -v $PORT | cut -f 4 -d ";" | cut -c 1-6 | grep $PORT`
+if [ "$S" ]
   then
-    echo "ERROR: Host $HOST already exists"
+    echo "ERROR: Service $S for host $HOSTNAME already exists"
     exit $STATE_ERROR
   fi
 
 
+# Try to fill description from SNMP and LLDP
+if [ -z "$DESCRIPTION" ] ; then
+  # Try to find interface details using snmp and lldp
+  int_id=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION $HOSTADDRESS 1.0.8802.1.1.2.1.3.7.1.3 | grep "\"$PORT\"" | cut -f 12 -d . | cut -f 1 -d "="`
+  if [[ $? -eq 0 && $int_id != *"OID"* ]]
+    then
+      int_id=`echo "$int_id" | tr -d " "` 
+      # Continue to find remote port
+      remote_port=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOSTADDRESS 1.0.8802.1.1.2.1.4.1.1.7.0.$int_id`
+      if [[ $? -eq 0 && $remote_port != *"OID"* ]]
+        then
+          remote_system=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOSTADDRESS 1.0.8802.1.1.2.1.4.1.1.9.0.$int_id`
+            if [[ $? -eq 0 && $remote_port != *"OID"* ]]
+              then
+                DESCRIPTION=`echo "$PORT --- $remote_system: $remote_port" | tr -d '"'`
+              else
+                # Try to find system hardware id instead of name
+                remote_system=`snmpwalk -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOSTADDRESS 1.0.8802.1.1.2.1.4.1.1.5.0.$int_id | tr " " "-"`
+                if [[ $? -eq 0 && $remote_system != *"OID"* ]]
+                  then
+                    DESCRIPTION=`echo "$PORT --- $remote_system: $remote_port" | tr -d '"'`
+                  else
+                    DESCRIPTION=`echo "$PORT --- ????: $remote_port" | tr -d '"'`
+                  fi
+              fi
+        else
+          DESCRIPTION="$PORT"
+        fi
+    else
+      DESCRIPTION="$PORT"
+    fi  
+  log "DESCRIPTION (from SNMP): $DESCRIPTION"
+else
+  DESCRIPTION="$PORT: $DESCRIPTION"
+fi
+
+
+
 # Create service
-perl $CLAPI -u $USER -p $PASSWORD -o HOST -a add -v "$NAME;$NAME;$HOST;$HOST_TEMPLATE;$POLLER;$HOSTGROUP"
-if []
+perl $CLAPI -u $USER -p $PASSWORD -o SERVICE -a add -v "$HOSTNAME;$DESCRIPTION;$SERVICE_TEMPLATE_TRAFFIC"
+if [ $? -eq 0 ]
   then
-
+   echo "."
   fi
+
 # Configure service
-perl $CLAPI -u $USER -p $PASSWORD -o HOST -a setparam -v "$NAME;snmp_community;SNMP_COMMUNITY"
-if []
+perl $CLAPI -u $USER -p $PASSWORD -o SERVICE -a SETMACRO -v "$HOSTNAME;$DESCRIPTION;INTERFACE;$PORT"
+if [ $? -eq 0 ]
   then
+    echo "."
 
   fi
+  exit
 perl $CLAPI -u $USER -p $PASSWORD -o HOST -a setparam -v "$NAME;snmp_version;SNMP_VERSION"
 if []
   then

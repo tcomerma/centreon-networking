@@ -14,12 +14,12 @@ REVISION='Version: 0.1'
 
 VERBOSE=1
 
-CLAPI='/usr....core/centreon.pl'
+CLAPI='/usr/local/centreon/www/modules/centreon-clapi/core/centreon'
 
 log() {
   if [ $VERBOSE -eq 1 ]
     then
-      echo $1
+      echo "$1"
     fi
 
 }
@@ -33,14 +33,14 @@ print_help() {
   echo "   -u Centreon username with admin privileges"
   echo "   -p Password for this username"
   echo "   -H IP o DNS name for the host. Goes to HOSTADDRESS field"
-  echo "   -n Name off the host. Goes to HOSTNAME"
+  echo "   -n Name of the host. Goes to HOSTNAME"
   echo "   -G Hostgroup where the host will belong"
   echo "   -T Host Template to apply"
   echo "   -r Restart poller to apply configuration. Default=No"
   echo "  "
   echo "   Default values for optional parameters [] are picked from default.settings file from same directory"
 	echo ""
-  exit $STATE_UNKNOWN
+  exit $STATE_ERROR
 }
 
 # Load file with default values
@@ -51,7 +51,7 @@ STATE_ERROR=1
 
 
 # Proces de parametres
-while getopts "u:p:H:n:G:T:rhV" Option
+while getopts "u:p:H:n:G:d:T:rhV" Option
 do
 	case $Option in
 		u ) USER=$OPTARG;;
@@ -59,6 +59,7 @@ do
     H ) HOST=$OPTARG;;
     G ) HOSTGROUP=$OPTARG;;
     n ) NAME=$OPTARG;;
+    d ) DESCRIPTION=$OPTARG;;
     T ) HOST_TEMPLATE=$OPTARG;;
     r ) RESTART=yes;;
     V ) VERBOSE=1;;
@@ -73,6 +74,7 @@ log "  PASSWORD: $PASSWORD"
 log "  NAME: $NAME"
 log "  HOSTNAME: $HOST"
 log "  HOSTGROUP: $HOSTGROUP"
+log "  DESCRIPTION: $DESCRIPTION"
 log "  HOST_TEMPLATE: $HOST_TEMPLATE"
 log "  Restart after: $RESTART"
 
@@ -93,12 +95,23 @@ fi
 
 if [ -z "$NAME" ] ; then
   # Try to find name using snmp
-  name=`snmpget -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOST system.sysName.0` && \
+  name=`snmpget -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOST system.sysName.0`
+  if [ $? -eq 0 ]
+    then
+      NAME="$name"
+      log "  NAME (from SNMP): $NAME"
+    else
+      echo "WARNING: SNMP query failed"
+    fi   
+fi
+
+if [ -z "$DESCRIPTION" ] ; then
+  # Try to find name using snmp
   description=`snmpget -c $SNMP_COMMUNITY -v $SNMP_VERSION -Ov -Oq $HOST system.sysDescr.0`
   if [ $? -eq 0 ]
     then
-      NAME=`echo $name - $description`
-      log "NAME (from SNMP): $NAME"
+      DESCRIPTION="$description"
+      log "  DESCRIPTION (from SNMP): $DESCRIPTION"
     else
       echo "WARNING: SNMP query failed"
     fi   
@@ -114,27 +127,33 @@ if [ "$H" ]
 
 
 # Create host
-perl $CLAPI -u $USER -p $PASSWORD -o HOST -a add -v "$NAME;$NAME;$HOST;$HOST_TEMPLATE;$POLLER;$HOSTGROUP"
-if []
+perl $CLAPI -u $USER -p $PASSWORD -o HOST -a add -v "$NAME;$DESCRIPTION;$HOST;$HOST_TEMPLATE;$POLLER;$HOSTGROUP"
+if [ $? -ne 0 ]
   then
-
+    echo "ERROR: Unable to create $HOST"
+    exit $STATE_ERROR
   fi
 # Configures host
 perl $CLAPI -u $USER -p $PASSWORD -o HOST -a setparam -v "$NAME;snmp_community;SNMP_COMMUNITY"
-if []
+if [ $? -ne 0 ]
   then
-
+    echo "ERROR: Unable to set SNMP community"
+    exit $STATE_ERROR
   fi
 perl $CLAPI -u $USER -p $PASSWORD -o HOST -a setparam -v "$NAME;snmp_version;SNMP_VERSION"
-if []
+if [ $? -ne 0 ]
   then
-
+    echo "ERROR: Unable set SNMP version"
+    exit $STATE_ERROR
   fi
 # If RESTART to apply config is asked, do it.
-perl $CLAPI -u $USER -p $PASSWORD -o HOST -a APPLYCFG -v "$POLLER"
-if []
+if [ "RESTART" == "yes" ]
   then
-
+    perl $CLAPI -u $USER -p $PASSWORD -a APPLYCFG -v "$POLLER"
+    if [ $? -ne 0 ]
+      then
+        echo "ERROR: Problem restarting poller"
+        exit $STATE_ERROR
+      fi
   fi
-
 exit $STATE_OK

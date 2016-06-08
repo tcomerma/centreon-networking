@@ -3,11 +3,11 @@
 
 SNMP_COMMUNITY=public
 SNMP_VERSION=2c
-USER=SuperUser
-PASSWORD=SuperUser
+USER=SuperAdmin
+PASSWORD=SuperAdmin
 HOST_TEMPLATE=switch-router
-SERVICE_TEMPLATE_TRAFFIC=check_traffic64_extreme
+SERVICE_TEMPLATE_TRAFFIC=extreme_interface_traffic
 SERVICE_TEMPLATE_ERRORS=check_traffic64_extreme
 RESTART=no
 POLLER=Central
-HOSTGROUP=Xarxa
+HOSTGROUP=Network
